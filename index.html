@@ -1082,7 +1082,13 @@ dialog.auth { border-radius: 20px; }
 .tr-sol li { display: grid; gap: 2px; }
 .tr-sar { font: 400 1.15rem/1.8 var(--arabic); text-align: right; }
 .tr-de { font-weight: 600; }
-.tr-rate, .tr-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.tr-rate, .tr-btns, .tr-next { display: flex; gap: 8px; flex-wrap: wrap; }
+.tr-run { display: grid; gap: 12px; }
+.tr-prog { display: grid; gap: 6px; font-size: .88rem; font-weight: 700; color: var(--muted); }
+.tr-hint { margin: 0; color: var(--muted); font-size: .92rem; }
+.tr-run .tr-item { margin-top: 0; }
+.tr-end { display: grid; gap: 10px; padding: 16px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.tr-end h3, .tr-end p { margin: 0; }
 .tr-res { margin: 0; padding: 8px 12px; border-radius: 10px; font-weight: 600; background: var(--surface-2); }
 .tr-res.ok { color: var(--good); } .tr-res.close { color: var(--muted); } .tr-res.no { color: var(--bad); }
 .tr-de mark { background: none; color: inherit; border-radius: 3px; padding: 0 1px; }

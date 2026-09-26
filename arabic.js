@@ -345,6 +345,7 @@
     if (lock) { body.innerHTML = lockPane(); wire(body); return; }
     if (state.tab === "vokabeln") body.innerHTML = vocabPane();
     else if (state.tab === "irab") body.innerHTML = irabPane();
+    else if (state.tr && state.tr.id === state.lesson) body.innerHTML = trRunPane(BY_ID[state.lesson]);
     else body.innerHTML = state.lesson ? lessonPane(BY_ID[state.lesson]) : listPane();
     wire(body);
   }
@@ -407,7 +408,8 @@
   /* ---------- Übersetzen (Arabisch → Deutsch) ----------
      From Book 1, lesson 12 on and in all of Book 2: a short text of the lesson (arabisch/texte.js)
      and the lesson's example sentences. One writes one's own translation, shows the solution and
-     marks it „richtig“ or „noch üben“ (progress ids ar-t-…, synced like the rest of the Lernstand). */
+     it is checked (arabisch/pruefen.js) or self-rated. The card „Übersetzen“ in the lesson starts a run that
+     asks the items one after another (progress ids ar-t-…, synced like the rest of the Lernstand). */
   var TEXTE = window.MADINA_TEXTE || {}, TRANS_FROM = BY_ID.m12 ? LESSONS.indexOf(BY_ID.m12) : 0;
   function transItems(l) {
     if (bookOf(l) === 1 && LESSONS.indexOf(l) < TRANS_FROM) return [];
@@ -416,87 +418,101 @@
     l.examples.forEach(function (e) { out.push({ id: "ar-t-" + hash(l.id + "|" + e[0]), s: [e] }); });
     return out;
   }
-  function transPane(l) {
-    var items = transItems(l);
-    if (!items.length) return "";
-    var done = items.filter(function (x) { return L.levelOf(x.id) === 2; }).length;
-    return '<section class="ar-block ar-trans"><details' + (state.trans === l.id ? " open" : "") + ' data-ar-trans="' + l.id + '"><summary><h3>' + T("Übersetzen") +
-      " <small>" + T("{n} von {m} richtig", { n: done, m: items.length }) + "</small></h3><p>" +
-      T("Übersetze ins Deutsche und lass deine Übersetzung prüfen.") + "</p></summary>" +
-      items.map(function (x, i) {
-        var lv = L.levelOf(x.id), mark = lv === 2 ? '<span class="tr-mark ok">✓</span>' : lv === -1 ? '<span class="tr-mark again">↺</span>' : "";
-        return '<div class="tr-item" data-tr="' + i + '">' + (x.title ? '<p class="tr-title">' + mark + T("Text") + ": " + esc(x.title) + "</p>" : '<p class="tr-title">' + mark + T("Satz {n}", { n: x.title === undefined && items[0].title ? i : i + 1 }) + "</p>") +
-          '<p class="tr-ar" lang="ar" dir="rtl">' + x.s.map(function (p) { return esc(p[0]); }).join(" ") + "</p>" +
-          '<textarea class="tr-in" rows="' + (x.s.length > 1 ? 4 : 2) + '" placeholder="' + esc(T("Deine Übersetzung …")) + '"></textarea>' +
-          '<div class="tr-btns"><button type="button" class="btn btn-sm btn-primary" data-tr-check="' + i + '">' + T("Prüfen") + '</button>' +
-          '<button type="button" class="btn btn-sm" data-tr-show="' + i + '">' + T("Lösung zeigen") + "</button></div>" +
-          '<p class="tr-res" hidden></p>' +
-          '<div class="tr-sol" hidden><ol>' + x.s.map(function (p) { return "<li>" + ar(p[0], "tr-sar") + '<span class="tr-de">' + esc(p[1]) + "</span></li>"; }).join("") + "</ol>" +
-          '<div class="tr-rate"><button type="button" class="btn btn-sm btn-primary" data-tr-ok="' + i + '">' + T("✓ Richtig übersetzt") + '</button><button type="button" class="btn btn-sm" data-tr-again="' + i + '">' + T("Noch üben") + "</button></div></div></div>";
-      }).join("") + "</details></section>";
+  function trItemHtml(x, i, items) {
+    var lv = L.levelOf(x.id), mark = lv === 2 ? '<span class="tr-mark ok">✓</span>' : lv === -1 ? '<span class="tr-mark again">↺</span>' : "";
+    return '<div class="tr-item" data-tr="' + i + '">' + '<p class="tr-title">' + mark + (x.title ? T("Text") + ": " + esc(x.title) : T("Satz {n}", { n: items[0].title ? i : i + 1 })) + "</p>" +
+      '<p class="tr-ar" lang="ar" dir="rtl">' + x.s.map(function (p) { return esc(p[0]); }).join(" ") + "</p>" +
+      '<textarea class="tr-in" rows="' + (x.s.length > 1 ? 5 : 2) + '" placeholder="' + esc(T("Deine Übersetzung …")) + '"></textarea>' +
+      '<div class="tr-btns"><button type="button" class="btn btn-primary" data-tr-check>' + T("Prüfen") + '</button>' +
+      '<button type="button" class="btn" data-tr-show>' + T("Lösung zeigen") + "</button></div>" +
+      '<p class="tr-res" hidden></p>' +
+      '<div class="tr-sol" hidden><ol>' + x.s.map(function (p) { return "<li>" + ar(p[0], "tr-sar") + '<span class="tr-de">' + esc(p[1]) + "</span></li>"; }).join("") + "</ol>" +
+      '<div class="tr-rate"><button type="button" class="btn btn-primary" data-tr-ok>' + T("✓ Richtig übersetzt") + '</button><button type="button" class="btn" data-tr-again>' + T("Noch üben") + "</button></div></div>" +
+      '<div class="tr-next" hidden><button type="button" class="btn btn-primary" data-tr-next></button></div></div>';
+  }
+  /* One run: the open items (or all, when everything is learned), asked one after another. */
+  function startTrans(l, all) {
+    var items = transItems(l), q = [];
+    items.forEach(function (x, i) { if (all || L.levelOf(x.id) !== 2) q.push(i); });
+    if (!q.length) items.forEach(function (x, i) { q.push(i); });
+    state.tr = { id: l.id, q: q, pos: 0, ok: {} };
+    render(); scrollToPane();
+  }
+  function trRunPane(l) {
+    var r = state.tr, items = transItems(l), n = r.q.length;
+    var head = '<button type="button" class="linkish ar-back" data-tr-exit>← ' + T("Zur Lektion") + "</button>" +
+      '<header class="ar-lesson-head"><p class="eyebrow">' + T("Übersetzen") + " · " + (bookOf(l) === 2 ? T("Buch 2") + " · " : "") + T("Lektion") + " " + esc(l.n) + "</p><h2>" + esc(l.title) + "</h2></header>";
+    if (r.pos >= n) {
+      var right = r.q.filter(function (i) { return r.ok[i]; }).length, open = items.filter(function (x) { return L.levelOf(x.id) !== 2; }).length;
+      return '<div class="ar-lesson-view tr-run">' + head + '<div class="panel tr-end"><h3>' + T("Runde geschafft: {n} von {m} richtig", { n: right, m: n }) + "</h3>" +
+        "<p>" + (open ? T("Noch offen in dieser Lektion: {n}", { n: open }) : T("✓ alles übersetzt")) + "</p>" +
+        '<div class="tr-btns">' + (open ? '<button type="button" class="btn btn-primary" data-tr-restart>' + T("Offene üben ({n})", { n: open }) + "</button>" : "") +
+        '<button type="button" class="btn' + (open ? "" : " btn-primary") + '" data-tr-all>' + T("Alle nochmal") + "</button>" +
+        '<button type="button" class="btn" data-tr-exit>' + T("Zur Lektion") + "</button></div></div></div>";
+    }
+    var s = { total: n, learned: r.pos, almost: 0, wrong: 0 };
+    return '<div class="ar-lesson-view tr-run">' + head +
+      '<div class="tr-prog"><span>' + T("Aufgabe {n} von {m}", { n: r.pos + 1, m: n }) + "</span>" + bar(s) + "</div>" +
+      '<p class="tr-hint">' + T("Übersetze ins Deutsche und lass deine Übersetzung prüfen.") + "</p>" +
+      trItemHtml(items[r.q[r.pos]], r.q[r.pos], items) + "</div>";
   }
   function wireTrans(body) {
-    var box = $("[data-ar-trans]", body);
-    if (!box) return;
-    var l = BY_ID[box.getAttribute("data-ar-trans")], items = transItems(l), go = $("[data-ar-gotrans]", body);
-    if (go) go.addEventListener("click", function () {
-      box.open = true; state.trans = l.id;
-      box.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-    box.addEventListener("toggle", function () { state.trans = box.open ? l.id : null; });
-    function save(it, x, ok) {
+    var go = $("[data-ar-gotrans]", body);
+    if (go) go.addEventListener("click", function () { startTrans(BY_ID[state.lesson]); });
+    var r = state.tr;
+    if (!r || !$(".tr-run", body)) return;
+    var l = BY_ID[r.id], items = transItems(l);
+    $all("[data-tr-exit]", body).forEach(function (b) { b.addEventListener("click", function () { state.tr = null; render(); scrollToPane(); }); });
+    var rs = $("[data-tr-restart]", body), ra = $("[data-tr-all]", body);
+    if (rs) rs.addEventListener("click", function () { startTrans(l); });
+    if (ra) ra.addEventListener("click", function () { startTrans(l, true); });
+    var it = $(".tr-item", body);
+    if (!it) return;
+    var idx = +it.getAttribute("data-tr"), x = items[idx], inp = $(".tr-in", it), nextBtn = $("[data-tr-next]", it);
+    nextBtn.textContent = r.pos + 1 < r.q.length ? T("Weiter") + " →" : T("Auswertung");
+    try { inp.focus({ preventScroll: true }); } catch (e) {}
+    function save(ok) {
+      r.ok[idx] = ok;
       L.recordId(x.id, ok);
       if (L.sync) L.sync();
       var t = $(".tr-title", it), old = $(".tr-mark", t);
       if (old) old.remove();
       t.insertAdjacentHTML("afterbegin", ok ? '<span class="tr-mark ok">✓</span>' : '<span class="tr-mark again">↺</span>');
-      var done = items.filter(function (y) { return L.levelOf(y.id) === 2; }).length;
-      $("summary small", box).textContent = T("{n} von {m} richtig", { n: done, m: items.length });
     }
-    function solution(it, x, res) {
-      var ol = $(".tr-sol ol", it);
-      if (res) ol.innerHTML = x.s.map(function (p, j) {
+    function finish() { $(".tr-btns", it).hidden = true; $(".tr-next", it).hidden = false; }
+    function solution(res) {
+      if (res) $(".tr-sol ol", it).innerHTML = x.s.map(function (p, j) {
         return "<li>" + ar(p[0], "tr-sar") + '<span class="tr-de">' + res.parts[j].map(function (g) {
           return g.k ? '<mark class="' + (g.k === 1 ? "tr-hit" : "tr-miss") + '">' + esc(g.t) + "</mark>" : esc(g.t);
         }).join("") + "</span></li>";
       }).join("");
       $(".tr-sol", it).hidden = false;
-      $("[data-tr-show]", it).hidden = true;
     }
-    $all("[data-tr-show]", box).forEach(function (b) {
-      b.addEventListener("click", function () { var it = b.closest(".tr-item"); solution(it, items[+b.getAttribute("data-tr-show")]); });
+    $("[data-tr-show]", it).addEventListener("click", function () { solution(); $(".tr-btns", it).hidden = true; });
+    $("[data-tr-check]", it).addEventListener("click", function () {
+      var txt = inp.value.trim(), out = $(".tr-res", it);
+      out.hidden = false;
+      if (!txt) { out.className = "tr-res"; out.textContent = T("Schreib zuerst deine Übersetzung."); return; }
+      var res = window.TR_CHECK(txt, x.s), miss = [];
+      res.parts.forEach(function (ps) { ps.forEach(function (g) { if (g.k === 2 && miss.indexOf(g.t) < 0) miss.push(g.t); }); });
+      out.className = "tr-res " + (res.verdict === "ok" ? "ok" : res.verdict === "close" ? "close" : "no");
+      out.textContent = res.verdict === "ok" ? T("✓ Richtig! {h} von {n} Kernwörtern getroffen.", { h: res.hit, n: res.total })
+        : (res.verdict === "close" ? T("Fast – {h} von {n} Kernwörtern getroffen.", { h: res.hit, n: res.total }) : T("Noch nicht – nur {h} von {n} Kernwörtern getroffen.", { h: res.hit, n: res.total })) +
+          (miss.length ? " " + T("Es fehlt: {w}", { w: miss.slice(0, 6).join(", ") }) : "") +
+          (res.neg ? " " + T("Achte auf die Verneinung (nicht / kein).") : "");
+      inp.readOnly = true;
+      save(res.verdict === "ok");
+      solution(res);
+      var ok = $("[data-tr-ok]", it);
+      $("[data-tr-again]", it).hidden = true;
+      ok.hidden = res.verdict === "ok";
+      ok.textContent = T("Meine Übersetzung stimmt auch");
+      ok.classList.remove("btn-primary");
+      finish();
     });
-    $all("[data-tr-check]", box).forEach(function (b) {
-      b.addEventListener("click", function () {
-        var it = b.closest(".tr-item"), x = items[+b.getAttribute("data-tr-check")], txt = $(".tr-in", it).value.trim(), out = $(".tr-res", it);
-        out.hidden = false;
-        if (!txt) { out.className = "tr-res"; out.textContent = T("Schreib zuerst deine Übersetzung."); return; }
-        var r = window.TR_CHECK(txt, x.s), miss = [];
-        r.parts.forEach(function (ps) { ps.forEach(function (g) { if (g.k === 2 && miss.indexOf(g.t) < 0) miss.push(g.t); }); });
-        var msg = r.verdict === "ok" ? T("✓ Richtig! {h} von {n} Kernwörtern getroffen.", { h: r.hit, n: r.total })
-          : (r.verdict === "close" ? T("Fast – {h} von {n} Kernwörtern getroffen.", { h: r.hit, n: r.total }) : T("Noch nicht – nur {h} von {n} Kernwörtern getroffen.", { h: r.hit, n: r.total })) +
-            (miss.length ? " " + T("Es fehlt: {w}", { w: miss.slice(0, 6).join(", ") }) : "") +
-            (r.neg ? " " + T("Achte auf die Verneinung (nicht / kein).") : "");
-        out.className = "tr-res " + (r.verdict === "ok" ? "ok" : r.verdict === "close" ? "close" : "no");
-        out.textContent = msg;
-        save(it, x, r.verdict === "ok");
-        solution(it, x, r);
-        var ok = $("[data-tr-ok]", it), again = $("[data-tr-again]", it);
-        again.hidden = true;
-        ok.hidden = r.verdict === "ok";
-        ok.textContent = T("Meine Übersetzung stimmt auch");
-      });
-    });
-    function rate(attr, ok) {
-      $all("[" + attr + "]", box).forEach(function (b) {
-        b.addEventListener("click", function () {
-          var it = b.closest(".tr-item");
-          save(it, items[+b.getAttribute(attr)], ok);
-          $(".tr-rate", it).hidden = true;
-        });
-      });
-    }
-    rate("data-tr-ok", true); rate("data-tr-again", false);
+    $("[data-tr-ok]", it).addEventListener("click", function () { save(true); $(".tr-rate", it).hidden = true; finish(); });
+    $("[data-tr-again]", it).addEventListener("click", function () { save(false); $(".tr-rate", it).hidden = true; finish(); });
+    nextBtn.addEventListener("click", function () { r.pos++; render(); scrollToPane(); });
   }
   function lessonPane(l) {
     var s = stats(lessonQs(l.id)), ls = BOOKS[bookOf(l)], idx = ls.indexOf(l);
@@ -510,7 +526,6 @@
       (l.examples.length ? '<section class="ar-block"><h3>' + T("Beispiele") + "</h3>" + '<ul class="ar-examples">' + l.examples.map(function (e) {
         return "<li>" + ar(e[0], "ar-ex") + '<span class="ar-de">' + esc(e[1]) + "</span></li>";
       }).join("") + "</ul></section>" : "") +
-      transPane(l) +
       '<section class="ar-block"><h3>' + T("Vokabeln") + " <small>" + l.vocab.length + "</small></h3>" + vocabTable(l.vocab) + "</section>" +
       (l.model.length ? '<section class="ar-block"><h3>' + T("Iʿrāb Schritt für Schritt") + "</h3>" + l.model.map(modelHtml).join("") + "</section>" : "") +
       '<nav class="ar-pager">' + (prev ? '<button type="button" class="btn" data-ar-lesson="' + prev.id + '">← ' + T("Lektion") + " " + esc(prev.n) + "</button>" : "<span></span>") +
